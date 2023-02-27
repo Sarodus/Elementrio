@@ -1,15 +1,15 @@
 <script lang="ts">
 	import { page } from '$app/stores';
-	import Game from '$lib/Game';
-	import { onMount } from 'svelte';
+	import Game, { isHost, ready, players, shoots } from '$lib/Game';
+	import Pad from '$lib/Pad.svelte';
+	import PadShoot from '$lib/PadShoot.svelte';
+	import Shot from '$lib/Shot.svelte';
+	import { onMount, tick } from 'svelte';
 	import { tweened } from 'svelte/motion';
 
 	const TICK_MS = 50;
 	const SPEED_RATIO = 10;
 	const game = new Game();
-	const isHost = game.isHost;
-	const ready = game.ready;
-	const players = game.players;
 
 	const xSpeed = tweened(0, { duration: 100 });
 	const ySpeed = tweened(0, { duration: 100 });
@@ -22,12 +22,21 @@
 	let screenX: number;
 	let screenY: number;
 	let playing = false;
+	let debug = true;
+	let isTouchDevice = false;
 	let playerBounds: DOMRect;
 	let tickInterval: ReturnType<typeof setInterval>;
+	let shootInterval = 500;
+	let aimX = 0;
+	let aimY = 0;
+	let mouseShootInterval: ReturnType<typeof setInterval>;
 
 	$: id = $ready && game.id;
 
 	onMount(() => {
+		isTouchDevice =
+			'ontouchstart' in window || navigator.maxTouchPoints > 0 || navigator.msMaxTouchPoints > 0;
+
 		return () => {
 			clearInterval(tickInterval);
 			game.destroy();
@@ -41,10 +50,10 @@
 			await game.joinGame($page.params.gameId);
 		}
 		handleResize();
-		tickInterval = setInterval(tick, TICK_MS);
+		tickInterval = setInterval(gameTick, TICK_MS);
 	}
 
-	function tick() {
+	function gameTick() {
 		if (!$ready) return;
 
 		x.update((v) => v + $xSpeed * SPEED_RATIO);
@@ -52,8 +61,18 @@
 		game.broadcastPosition($x, $y);
 	}
 
+	function tooggleFullScreen() {
+		if (document.fullscreenElement) {
+			document.exitFullscreen();
+		} else {
+			gameEl.requestFullscreen();
+		}
+	}
+
 	async function play() {
-		gameEl.requestFullscreen();
+		if (isTouchDevice) {
+			// gameEl.requestFullscreen();
+		}
 		playing = true;
 		await tick();
 		await init();
@@ -65,13 +84,11 @@
 		screenY = window.innerHeight;
 	}
 
-	function handleMouseMove(event: MouseEvent) {
-		handleMove(event.clientX, event.clientY);
-	}
-
-	function handleTouchMove(event: TouchEvent) {
-		handleMove(event.touches[0].clientX, event.touches[0].clientY);
-	}
+	// function handleMouseMove(event: MouseEvent) {
+	// 	console.log('MOUSEMOVE');
+	// 	if (!playing) return;
+	// 	handleMove(event.clientX, event.clientY);
+	// }
 
 	function handleMove(clientX: number, clientY: number) {
 		const xMaxForce = (screenX - playerBounds.width) / 4;
@@ -84,6 +101,47 @@
 		const yForceRatio = -(yForce / yMaxForce);
 		ySpeed.set(Math.min(1, Math.max(-1, yForceRatio)));
 	}
+
+	function mouseShoot() {
+		if (isTouchDevice || !playerBounds) return;
+		const shootX = aimX - (screenX - playerBounds.x - playerBounds.width / 2);
+		const shootY = aimY - (screenY - playerBounds.y - playerBounds.height / 2);
+		shoot(shootX, shootY);
+	}
+
+	function startMouseShoot(e: MouseEvent) {
+		window.removeEventListener('mousemove', updateAimDirection);
+		window.removeEventListener('mouseup', stopMouseShoop);
+		window.addEventListener('mousemove', updateAimDirection);
+		window.addEventListener('mouseup', stopMouseShoop);
+		aimX = e.clientX;
+		aimY = e.clientY;
+		mouseShoot();
+		clearInterval(mouseShootInterval);
+		mouseShootInterval = setInterval(mouseShoot, shootInterval);
+	}
+
+	function updateAimDirection(e: MouseEvent) {
+		aimX = e.clientX;
+		aimY = e.clientY;
+	}
+
+	function stopMouseShoop(e: MouseEvent) {
+		window.removeEventListener('mousemove', updateAimDirection);
+		window.removeEventListener('mouseup', stopMouseShoop);
+		clearInterval(mouseShootInterval);
+	}
+
+	async function shoot(shootX: number, shootY: number) {
+		// TODO, prevent shooting clicking fast, throttle
+		if (!shootX && !shootY) return;
+		// Normalize vector
+		const l = Math.sqrt(shootX ** 2 + shootY ** 2);
+		const normalizedX = shootX / l;
+		const normalizedY = shootY / l;
+
+		game.createShoot(game.id, $x, $y, normalizedX, normalizedY);
+	}
 </script>
 
 <svelte:window on:resize={handleResize} />
@@ -91,38 +149,71 @@
 	<title>{$isHost ? 'Server' : 'Client'}</title>
 </svelte:head>
 
-<div class="absolute">
-	{#each Array.from($players.entries()) as [id, player]}
-		<p>{id} - {player.name} - {player.x} - {player.y}</p>
-	{/each}
-	<hr />
-	{id}
-	<hr />
-	<p>xSpeed: {$xSpeed}</p>
-	<p>ySpeed: {$ySpeed}</p>
-	<p>X: {$x}</p>
-	<p>Y: {$y}</p>
-</div>
-
 <div
 	bind:this={gameEl}
-	class="bg-slate-800 h-screen flex items-center justify-center relative"
-	on:mousemove={handleMouseMove}
-	on:touchmove={handleTouchMove}
+	class="relative flex items-center justify-center w-full h-screen bg-slate-800 overflow-hidden"
+	on:mousedown={startMouseShoot}
 >
+	{#if debug}
+		<div class="absolute inset-0">
+			{#each Array.from($players.entries()) as [id, player]}
+				<p>{id} - {player.name} - {player.x} - {player.y}</p>
+			{/each}
+			<hr />
+			{id}
+			<hr />
+			<p>xSpeed: {$xSpeed}</p>
+			<p>ySpeed: {$ySpeed}</p>
+			<p>X: {$x}</p>
+			<p>Y: {$y}</p>
+			<p>Aim: {aimX} - {aimY}</p>
+		</div>
+	{/if}
+
+	{#if isTouchDevice}
+		<button
+			on:click={tooggleFullScreen}
+			class="absolute p-3 border rounded top-4 right-4 border-slate-600 hover:bg-slate-600"
+		>
+			<svg class="fill-white" height="14px" version="1.1" viewBox="0 0 14 14" width="14px">
+				<path
+					d="M2,9 L0,9 L0,14 L5,14 L5,12 L2,12 L2,9 L2,9 Z M0,5 L2,5 L2,2 L5,2 L5,0 L0,0 L0,5 L0,5 Z M12,12 L9,12 L9,14 L14,14 L14,9 L12,9 L12,12 L12,12 Z M9,0 L9,2 L12,2 L12,5 L14,5 L14,0 L9,0 L9,0 Z"
+				/>
+			</svg>
+		</button>
+		<div class="absolute bottom-4 left-4">
+			<Pad bind:x={$xSpeed} bind:y={$ySpeed} />
+		</div>
+		<div class="absolute bottom-4 right-4">
+			<PadShoot {shootInterval} on:shoot={(e) => shoot(e.detail.x, e.detail.y)} />
+		</div>
+	{/if}
+
 	{#if !playing}
-		<button on:click={play} class="absolute inset-1/2">PLAY</button>
+		<button
+			on:click={play}
+			class="absolute px-5 py-3 m-auto transition-all border rounded border-slate-600 hover:bg-slate-600 hover:translate-y-1"
+		>
+			PLAY
+		</button>
 	{:else}
+		<!-- Shoots -->
+		{#each $shoots as shoot (shoot.id)}
+			<Shot {shoot} />
+		{/each}
+
+		<!--PLAYER  -->
 		<div
 			bind:this={playerEl}
-			class="rounded-full bg-white w-10 h-10 border-4 border-cyan-300 z-10"
+			class="z-10 w-10 h-10 bg-white border-4 rounded-full border-cyan-300"
 		/>
+
 		{#if $ready}
 			{#each Array.from($players.entries()) as [id, player]}
 				{#if id !== game.id}
 					<div
 						style="transform: translate({player.x - $x}px, {player.y - $y}px);"
-						class="absolute transition-transform duration-100 rounded-full bg-red-100 w-10 h-10 border-4 border-red-500"
+						class="absolute w-10 h-10 transition-transform duration-100 bg-red-100 border-4 border-red-500 rounded-full"
 					/>
 				{/if}
 			{/each}

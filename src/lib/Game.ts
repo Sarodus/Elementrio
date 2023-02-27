@@ -1,15 +1,13 @@
 import { type DataConnection, Peer } from 'peerjs';
 import { get, writable } from 'svelte/store';
-
-type Player = {
-	name: string;
-	x: number;
-	y: number;
-};
+import type { Player, Shoot } from './types';
+import { v4 as uuidv4 } from 'uuid';
+import { SHOOT_BROADCAST_RADIO } from './constants';
 
 enum BroadcastActions {
 	SYNC_PLAYERS,
-	SYNC_POSITIONS
+	SYNC_POSITIONS,
+	PLAYER_SHOOT
 }
 
 interface Action {
@@ -26,15 +24,22 @@ interface ActionSyncPositions extends Action {
 	data: [number, number];
 }
 
-type Actions = ActionSyncPlayer | ActionSyncPositions;
+interface ActionPlayerShoot extends Action {
+	action: BroadcastActions.PLAYER_SHOOT;
+	data: Shoot;
+}
+
+type Actions = ActionSyncPlayer | ActionSyncPositions | ActionPlayerShoot;
+
+export const isHost = writable(false);
+export const ready = writable(false);
+export const data = writable('');
+export const players = writable<Map<string, Player>>(new Map());
+export const shoots = writable<Shoot[]>([]);
 
 export default class Game {
 	id: string = '';
 	peer?: Peer;
-	isHost = writable(false);
-	ready = writable(false);
-	data = writable('');
-	players = writable<Map<string, Player>>(new Map());
 	cons: Map<string, DataConnection> = new Map();
 
 	async tryBeHost(gameId: string) {
@@ -48,7 +53,7 @@ export default class Game {
 				peer.on('connection', (conn) => {
 					conn.on('open', () => {
 						this.cons.set(conn.peer, conn);
-						this.players.update((players) => {
+						players.update((players) => {
 							players.set(conn.peer, { name: '', x: 0, y: 0 });
 							return players;
 						});
@@ -59,7 +64,7 @@ export default class Game {
 					});
 					conn.on('close', () => {
 						this.cons.delete(conn.peer);
-						this.players.update((players) => {
+						players.update((players) => {
 							players.delete(conn.peer);
 							return players;
 						});
@@ -67,7 +72,7 @@ export default class Game {
 					conn.on('iceStateChanged', (status) => {
 						if (status === 'disconnected' || status === 'closed' || status === 'failed') {
 							this.cons.delete(conn.peer);
-							this.players.update((players) => {
+							players.update((players) => {
 								players.delete(conn.peer);
 								return players;
 							});
@@ -75,15 +80,15 @@ export default class Game {
 					});
 				});
 			});
-			this.players.update((players) => {
+			players.update((players) => {
 				players.set(this.id, { name: '', x: 0, y: 0 });
 				return players;
 			});
-			this.isHost.set(true);
-			this.ready.set(true);
+			isHost.set(true);
+			ready.set(true);
 			this.peer = peer;
 		} catch (error) {
-			this.isHost.set(false);
+			isHost.set(false);
 			throw error;
 		}
 	}
@@ -109,17 +114,17 @@ export default class Game {
 					this.handleServerClose();
 				}
 			});
-			this.players.update((players) => {
+			players.update((players) => {
 				players.set(this.id, { name: '', x: 0, y: 0 });
 				players.set(gameId, { name: '', x: 0, y: 0 });
 				return players;
 			});
-			this.ready.set(true);
+			ready.set(true);
 		});
 		peer.on('connection', (conn) => {
 			conn.on('open', () => {
 				this.cons.set(conn.peer, conn);
-				this.players.update((players) => {
+				players.update((players) => {
 					players.set(conn.peer, { name: '', x: 0, y: 0 });
 					return players;
 				});
@@ -129,7 +134,7 @@ export default class Game {
 			});
 			conn.on('close', () => {
 				this.cons.delete(conn.peer);
-				this.players.update((players) => {
+				players.update((players) => {
 					players.delete(conn.peer);
 					return players;
 				});
@@ -137,7 +142,7 @@ export default class Game {
 			conn.on('iceStateChanged', (status) => {
 				if (status === 'disconnected' || status === 'closed' || status === 'failed') {
 					this.cons.delete(conn.peer);
-					this.players.update((players) => {
+					players.update((players) => {
 						players.delete(conn.peer);
 						return players;
 					});
@@ -153,7 +158,7 @@ export default class Game {
 		conn.on('error', console.log);
 		conn.on('open', () => {
 			this.cons.set(conn.peer, conn);
-			this.players.update((players) => {
+			players.update((players) => {
 				players.set(conn.peer, { name: '', x: 0, y: 0 });
 				return players;
 			});
@@ -164,14 +169,14 @@ export default class Game {
 		conn.on('close', () => {
 			console.log('CLOSED!', conn, peerId, conn.peer);
 			this.cons.delete(conn.peer);
-			this.players.update((players) => {
+			players.update((players) => {
 				players.delete(conn.peer);
 				return players;
 			});
 		});
 		conn.on('iceStateChanged', (status) => {
 			if (status === 'disconnected' || status === 'closed' || status === 'failed') {
-				this.players.update((players) => {
+				players.update((players) => {
 					players.delete(conn.peer);
 					return players;
 				});
@@ -184,18 +189,19 @@ export default class Game {
 		console.log('HANDLE SERVE CLOSE!');
 	}
 
-	broadcast(action: Action) {
-		// console.log('BROADCAST', action, this.cons);
+	broadcast(action: Action, radio?: number) {
+		// TODO: radio broadcast
 		this.cons.forEach((conn) => conn.send(action));
 	}
 
 	broadcastSyncPlayers() {
 		const syncAction: ActionSyncPlayer = {
 			action: BroadcastActions.SYNC_PLAYERS,
-			data: Array.from(get(this.players).keys())
+			data: Array.from(get(players).keys())
 		};
 		this.broadcast(syncAction);
 	}
+
 	syncPlayers(action: ActionSyncPlayer) {
 		const newCons = action.data.filter((id) => !this.cons.has(id) && id !== this.id);
 		newCons.forEach((peerId) => {
@@ -213,7 +219,7 @@ export default class Game {
 	}
 
 	#updatePlayerPosition(peerId: string, x: number, y: number) {
-		this.players.update((players) => {
+		players.update((players) => {
 			const player = players.get(peerId);
 			if (player) {
 				player.x = x;
@@ -223,6 +229,10 @@ export default class Game {
 		});
 	}
 
+	#handlePlayerShoot(action: ActionPlayerShoot) {
+		shoots.update((shoots) => [...shoots, action.data]);
+	}
+
 	handleData(peerId: string, action: Actions) {
 		switch (action.action) {
 			case BroadcastActions.SYNC_PLAYERS:
@@ -230,10 +240,43 @@ export default class Game {
 				break;
 			case BroadcastActions.SYNC_POSITIONS:
 				this.#updatePlayerPosition(peerId, action.data[0], action.data[1]);
+				break;
+			case BroadcastActions.PLAYER_SHOOT:
+				this.#handlePlayerShoot(action);
+				break;
 			default:
 				break;
 		}
-		console.log('handleData', action);
+	}
+
+	createShoot(playerId: string, playerX: number, playerY: number, shootX: number, shootY: number) {
+		const syncAction: ActionPlayerShoot = {
+			action: BroadcastActions.PLAYER_SHOOT,
+			data: {
+				id: uuidv4(),
+				playerId,
+				from: {
+					x: playerX,
+					y: playerY
+				},
+				to: {
+					x: shootX,
+					y: shootY
+				}
+			}
+		};
+		// TODO, broadcast optimization to only in radio players
+		this.broadcast(syncAction, SHOOT_BROADCAST_RADIO);
+		this.#handlePlayerShoot({
+			...syncAction,
+			data: {
+				...syncAction.data,
+				from: {
+					x: 0,
+					y: 0
+				}
+			}
+		});
 	}
 
 	destroy() {
