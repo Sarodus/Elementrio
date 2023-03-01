@@ -9,6 +9,8 @@
 	const SHOOT_VECTOR_SPEED = 500;
 
 	export let shoot: Shoot;
+	export let playerX = 0;
+	export let playerY = 0;
 
 	onMount(() => {
 		const possiblePlayers = getPossiblePlayers($players);
@@ -43,8 +45,8 @@
 	class="absolute shoot-move w-2 h-2 bg-purple-500"
 	style="
 --shoot-duration: {SHOOT_TIMEOUT_MS}ms;
---shoot-from-x: {shoot.from.x}px;
---shoot-from-y: {shoot.from.y}px;
+--shoot-from-x: {shoot.from.x + playerX}px;
+--shoot-from-y: {shoot.from.y + playerY}px;
 --shoot-to-x: {shoot.to.x * SHOOT_VECTOR_SPEED}px;
 --shoot-to-y: {shoot.to.y * SHOOT_VECTOR_SPEED}px;"
 />

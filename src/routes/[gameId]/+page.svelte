@@ -142,16 +142,59 @@
 
 		game.createShoot(game.id, $x, $y, normalizedX, normalizedY);
 	}
+
+	function onKeyDown(e: KeyboardEvent) {
+		switch (e.key) {
+			case 'd':
+			case 'ArrowRight':
+				$xSpeed = 1;
+				break;
+			case 'a':
+			case 'ArrowLeft':
+				$xSpeed = -1;
+				break;
+			case 'w':
+			case 'ArrowUp':
+				$ySpeed = -1;
+				break;
+			case 's':
+			case 'ArrowDown':
+				$ySpeed = 1;
+				break;
+		}
+	}
+	function onKeyUp(e: KeyboardEvent) {
+		switch (e.key) {
+			case 'd':
+			case 'ArrowRight':
+			case 'a':
+			case 'ArrowLeft':
+				$xSpeed = 0;
+				break;
+			case 'w':
+			case 'ArrowUp':
+			case 's':
+			case 'ArrowDown':
+				$ySpeed = 0;
+				break;
+		}
+		console.log('onKeyUp', e.key);
+	}
 </script>
 
-<svelte:window on:resize={handleResize} />
+<svelte:window
+	on:resize={handleResize}
+	on:keydown={onKeyDown}
+	on:keypress={onKeyDown}
+	on:keyup={onKeyUp}
+/>
 <svelte:head>
 	<title>{$isHost ? 'Server' : 'Client'}</title>
 </svelte:head>
 
 <div
 	bind:this={gameEl}
-	class="relative flex items-center justify-center w-full h-screen bg-slate-800 overflow-hidden"
+	class="relative flex items-center justify-center w-full h-screen overflow-hidden"
 	on:mousedown={startMouseShoot}
 >
 	{#if debug}
@@ -199,10 +242,11 @@
 	{:else}
 		<!-- Shoots -->
 		{#each $shoots as shoot (shoot.id)}
-			<Shot {shoot} />
+			{@const ownShoot = shoot.playerId === game.id}
+			<Shot {shoot} playerX={ownShoot ? 0 : $x} playerY={ownShoot ? 0 : $y} />
 		{/each}
 
-		<!--PLAYER  -->
+		<!-- Player -->
 		<div
 			bind:this={playerEl}
 			class="z-10 w-10 h-10 bg-white border-4 rounded-full border-cyan-300"
